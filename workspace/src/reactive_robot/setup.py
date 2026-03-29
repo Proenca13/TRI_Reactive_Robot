@@ -13,6 +13,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.launch.py'))),
         (os.path.join('share', package_name, 'worlds'), glob(os.path.join('worlds', '*.sdf'))),
+        (os.path.join('share', package_name, 'worlds'), glob(os.path.join('worlds', '*.obj'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
