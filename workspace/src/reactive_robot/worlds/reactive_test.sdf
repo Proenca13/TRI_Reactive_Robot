@@ -117,10 +117,10 @@
           <ray>
             <scan>
               <horizontal>
-                <samples>181</samples>
+                <samples>360</samples>
                 <resolution>1</resolution>
-                <min_angle>-1.5708</min_angle>
-                <max_angle>1.5708</max_angle>
+                <min_angle>-3.14159</min_angle>
+                <max_angle>3.14159</max_angle>
               </horizontal>
               <vertical>
                 <samples>1</samples>
@@ -141,84 +141,69 @@
       </link>
 
       <link name="left_wheel">
-        <pose>0 0.17 0 1.5708 0 0</pose>
+        <pose>0 0.17 -0.02 1.5708 0 0</pose>
         <inertial>
           <mass>0.3</mass>
           <inertia>
-            <ixx>0.001</ixx>
-            <iyy>0.001</iyy>
-            <izz>0.001</izz>
-            <ixy>0</ixy>
-            <ixz>0</ixz>
-            <iyz>0</iyz>
+            <ixx>0.001</ixx><iyy>0.001</iyy><izz>0.001</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
           </inertia>
         </inertial>
         <collision name="collision">
           <geometry>
-            <cylinder>
-              <radius>0.05</radius>
-              <length>0.03</length>
-            </cylinder>
+            <cylinder><radius>0.05</radius><length>0.03</length></cylinder>
           </geometry>
+          <surface>
+            <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
+          </surface>
         </collision>
         <visual name="visual">
           <geometry>
-            <cylinder>
-              <radius>0.05</radius>
-              <length>0.03</length>
-            </cylinder>
+            <cylinder><radius>0.05</radius><length>0.03</length></cylinder>
           </geometry>
         </visual>
       </link>
 
       <link name="right_wheel">
-        <pose>0 -0.17 0 1.5708 0 0</pose>
+        <pose>0 -0.17 -0.02 1.5708 0 0</pose>
         <inertial>
           <mass>0.3</mass>
           <inertia>
-            <ixx>0.001</ixx>
-            <iyy>0.001</iyy>
-            <izz>0.001</izz>
-            <ixy>0</ixy>
-            <ixz>0</ixz>
-            <iyz>0</iyz>
+            <ixx>0.001</ixx><iyy>0.001</iyy><izz>0.001</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
           </inertia>
         </inertial>
         <collision name="collision">
           <geometry>
-            <cylinder>
-              <radius>0.05</radius>
-              <length>0.03</length>
-            </cylinder>
+            <cylinder><radius>0.05</radius><length>0.03</length></cylinder>
           </geometry>
+          <surface>
+            <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
+          </surface>
         </collision>
         <visual name="visual">
           <geometry>
-            <cylinder>
-              <radius>0.05</radius>
-              <length>0.03</length>
-            </cylinder>
+            <cylinder><radius>0.05</radius><length>0.03</length></cylinder>
           </geometry>
         </visual>
       </link>
 
       <link name="caster">
-        <pose>-0.13 0 -0.03 0 0 0</pose>
+        <pose>-0.13 0 -0.04 0 0 0</pose>
         <inertial>
           <mass>0.1</mass>
           <inertia>
-            <ixx>0.0001</ixx>
-            <iyy>0.0001</iyy>
-            <izz>0.0001</izz>
-            <ixy>0</ixy>
-            <ixz>0</ixz>
-            <iyz>0</iyz>
+            <ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
           </inertia>
         </inertial>
         <collision name="collision">
           <geometry>
             <sphere><radius>0.03</radius></sphere>
           </geometry>
+          <surface>
+            <friction><ode><mu>0.0</mu><mu2>0.0</mu2></ode></friction>
+          </surface>
         </collision>
         <visual name="visual">
           <geometry>
@@ -231,8 +216,7 @@
         <parent>chassis</parent>
         <child>left_wheel</child>
         <axis>
-          <xyz>0 1 0</xyz>
-          <limit>
+          <xyz>0 0 1</xyz> <limit>
             <lower>-1000000</lower>
             <upper>1000000</upper>
             <effort>1000000</effort>
@@ -245,8 +229,7 @@
         <parent>chassis</parent>
         <child>right_wheel</child>
         <axis>
-          <xyz>0 1 0</xyz>
-          <limit>
+          <xyz>0 0 1</xyz> <limit>
             <lower>-1000000</lower>
             <upper>1000000</upper>
             <effort>1000000</effort>

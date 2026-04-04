@@ -29,6 +29,8 @@ setup(
     entry_points={
         'console_scripts': [
             'reactive_node = reactive_robot.reactive_node:main',
+            'decision_node = reactive_robot.decision_node:main',
+            'radar_node = reactive_robot.radar_node:main',
         ],
     },
 )
