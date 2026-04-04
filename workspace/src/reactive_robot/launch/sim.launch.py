@@ -24,7 +24,7 @@ def generate_launch_description():
                 'gz_sim.launch.py'
             )
         ),
-        launch_arguments={'gz_args': f'-r "{world_path}" --render-engine ogre'}.items()
+        launch_arguments={'gz_args': f'-r "{world_path}"'}.items()
     )
 
     bridge = Node(
@@ -50,10 +50,17 @@ def generate_launch_description():
         output='screen'
     )
 
+    movement_node = Node(
+        package='reactive_robot',
+        executable='movement_node',
+        output='screen'
+    )
+
     return LaunchDescription([
         set_env_var,
         gz_sim,
         bridge,
         radar_node,
-        decision_node
+        decision_node,
+        movement_node
     ])
