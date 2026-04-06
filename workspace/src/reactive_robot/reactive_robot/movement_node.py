@@ -41,9 +41,10 @@ class MovementNode(Node):
         else:
             turn_angle_deg = angle_deg
             angular_speed = 0.5   # Spin left (positive)
-            
-        self.get_logger().info(f'MUSCLES: Starting movement! Turn: {turn_angle_deg}deg, Drive: {distance}m')
 
+
+        self.get_logger().info(f'MUSCLES: Starting movement! Turn: {turn_angle_deg}deg, Drive: {distance}m')
+        
         if turn_angle_deg > 0:
             twist.angular.z = angular_speed
             self.vel_pub.publish(twist)
