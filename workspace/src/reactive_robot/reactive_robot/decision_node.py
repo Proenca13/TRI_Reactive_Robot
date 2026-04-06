@@ -49,7 +49,6 @@ class DecisionNode(Node):
 
     def done_callback(self, _msg: Vector3):
         self.waiting = False
-        self.step()
 
     def step(self):
         if self.last_scan is None or self.waiting or self.done:
