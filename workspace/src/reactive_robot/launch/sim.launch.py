@@ -32,9 +32,16 @@ def generate_launch_description():
         launch_arguments={'gz_args': f'-r "{world_path}"'}.items()
     )
 
-    # Generate random starting coordinates
-    spawn_x = str(random.uniform(-10.0, 10.0))
-    spawn_y = str(random.uniform(-10.0, 10.0))
+    SAFE_X_MIN = -7.0
+    SAFE_X_MAX = -4.0
+    SAFE_Y_MIN = 0.0
+    SAFE_Y_MAX = 4.0
+
+    # Generate random starting coordinates strictly within the safe zone
+    spawn_x = str(random.uniform(SAFE_X_MIN, SAFE_X_MAX))
+    spawn_y = str(random.uniform(SAFE_Y_MIN, SAFE_Y_MAX))
+    
+    # Random heading is fully random (360 degrees)
     spawn_yaw = str(random.uniform(-3.14159, 3.14159))
 
     # Node to inject the robot into Gazebo at the random coordinates
