@@ -33,9 +33,8 @@ def generate_launch_description():
     )
 
     # Generate random starting coordinates
-    # IMPORTANT: Adjust these min/max bounds so the robot spawns safely inside your walls!
-    spawn_x = str(random.uniform(-3.0, 3.0))
-    spawn_y = str(random.uniform(-3.0, 3.0))
+    spawn_x = str(random.uniform(-15.0, 15.0))
+    spawn_y = str(random.uniform(-15.0, 15.0))
     spawn_yaw = str(random.uniform(-3.14159, 3.14159))
 
     # Node to inject the robot into Gazebo at the random coordinates
@@ -43,7 +42,7 @@ def generate_launch_description():
         package='ros_gz_sim',
         executable='create',
         arguments=[
-            '-world', 'reactive_test',  # Must match the <world name=""> in your SDF
+            '-world', 'reactive_test',
             '-file', robot_path,
             '-name', 'reactive_bot',
             '-x', spawn_x,
@@ -86,7 +85,7 @@ def generate_launch_description():
     return LaunchDescription([
         set_env_var,
         gz_sim,
-        spawn_robot,  
+        spawn_robot,
         bridge,
         radar_node,
         decision_node,
