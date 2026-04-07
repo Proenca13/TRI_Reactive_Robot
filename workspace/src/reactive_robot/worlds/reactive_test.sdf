@@ -47,13 +47,13 @@
 
     <model name="shape_5_walls">
       <static>true</static>
-      <pose>0 0 0 0 0 0</pose> 
+      <pose>-4.0 4.0 0.5 1.5708 0 0</pose>
       <link name="walls_link">
-        
         <collision name="collision">
           <geometry>
             <mesh>
-              <uri>shape_5.obj</uri>
+              <uri>shape_5.STL</uri>
+              <scale>100 100 100</scale>
             </mesh>
           </geometry>
         </collision>
@@ -61,7 +61,8 @@
         <visual name="visual">
           <geometry>
             <mesh>
-              <uri>shape_5.obj</uri>
+              <uri>shape_5.STL</uri>
+              <scale>100 100 100</scale>
             </mesh>
           </geometry>
           <material>
@@ -69,7 +70,6 @@
             <diffuse>0 0 0 1</diffuse>
           </material>
         </visual>
-
       </link>
     </model>
 
