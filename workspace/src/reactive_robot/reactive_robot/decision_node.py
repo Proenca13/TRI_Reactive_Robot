@@ -49,7 +49,6 @@ class DecisionNode(Node):
 
     def done_callback(self, _msg: Vector3):
         self.waiting = False
-        self.step()
 
     def step(self):
         if self.last_scan is None or self.waiting or self.done:
@@ -84,6 +83,7 @@ class DecisionNode(Node):
 
         # --- Priority 5: no wall -> random movement ---
         self._wander(d)
+        self.get_logger().info('Wander, going to the 5')
 
     # -----------------------------------------------------------------------
     # Predicates
@@ -119,8 +119,7 @@ class DecisionNode(Node):
 
     def _wall_nearby(self, d):
         # Wall is nearby if the minimum distance is strictly less than the mean
-        mean = sum(d) / len(d)
-        return min(d) < mean
+        return min(d) < TARGET_WALL_DISTANCE * 3  # ex: < 0.9m
 
     def _inside_circle(self, d):
         # Choose 4 cardinal directions with the maximum guaranteed in one of them
@@ -162,7 +161,6 @@ class DecisionNode(Node):
     # looking for an abrupt jump compared to the gradual slope so far.
     # A circle opening creates a smooth decrease from 270 outward,
     # followed by a sudden drop when the arc ends.
-
         def find_jump(start, step):
             diffs = []
             idx = start
@@ -237,9 +235,9 @@ class DecisionNode(Node):
         self._send(angle, STEP_DISTANCE)
 
     def _wander(self, d):
-        # No wall detected -> random movement
-        angle = random.choice([0, 90, 180, 270])
-        self._send(angle, STEP_DISTANCE)
+        min_idx = d.index(min(d))
+        self.get_logger().info(f'min distance is {min(d)}')
+        self._send(min_idx * 10, STEP_DISTANCE * 5)
 
     # -----------------------------------------------------------------------
 
