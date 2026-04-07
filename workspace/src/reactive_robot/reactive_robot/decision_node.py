@@ -8,7 +8,7 @@ import random
 # Tuning parameters (only what cannot be derived mathematically)
 # ---------------------------------------------------------------------------
 
-TARGET_WALL_DISTANCE = 0.3
+TARGET_WALL_DISTANCE = 1.5
 STEP_DISTANCE = 0.1
 CENTERED_TOLERANCE = 0.05
 JUMP_FACTOR = 3.0  # how abrupt the jump at the circle opening must be
@@ -82,6 +82,7 @@ class DecisionNode(Node):
             return
 
         # --- Priority 5: no wall -> random movement ---
+        self.get_logger().info('No wall -> Wandering')
         self._wander(d)
 
     # -----------------------------------------------------------------------
@@ -118,8 +119,7 @@ class DecisionNode(Node):
 
     def _wall_nearby(self, d):
         # Wall is nearby if the minimum distance is strictly less than the mean
-        mean = sum(d) / len(d)
-        return min(d) < mean
+        return min(d) < 6.0
 
     def _inside_circle(self, d):
         # Choose 4 cardinal directions with the maximum guaranteed in one of them
@@ -151,16 +151,14 @@ class DecisionNode(Node):
         pair1_err = d[pair1[0]] - d[pair1[1]]
         pair2_err = d[pair2[0]] - d[pair2[1]]
 
-        centered = abs(pair1_err) < CENTERED_TOLERANCE and \
-                abs(pair2_err) < CENTERED_TOLERANCE
+        centered = abs(pair1_err) < CENTERED_TOLERANCE and abs(pair2_err) < CENTERED_TOLERANCE
 
         return centered and heading_out
 
     def _circle_detected(self, d):
-    # Starting from 270 (RIGHT_IDX), scan outward in both directions
-    # looking for an abrupt jump compared to the gradual slope so far.
-    # A circle opening creates a smooth decrease from 270 outward,
-    # followed by a sudden drop when the arc ends.
+        if min(d) > 3.0:
+            return False
+ 
 
         def find_jump(start, step):
             diffs = []
@@ -203,8 +201,7 @@ class DecisionNode(Node):
         pair1_err = d[pair1[0]] - d[pair1[1]]
         pair2_err = d[pair2[0]] - d[pair2[1]]
 
-        if abs(pair1_err) < CENTERED_TOLERANCE and \
-        abs(pair2_err) < CENTERED_TOLERANCE:
+        if abs(pair1_err) < CENTERED_TOLERANCE and abs(pair2_err) < CENTERED_TOLERANCE:
             self._send(max_idx * 10, 0.0)
             return
 
@@ -218,20 +215,72 @@ class DecisionNode(Node):
         self._send(angle, move_dist)
 
     def _wall_follow(self, d):
-        # PI controller for right-side wall following
-        right_dists = d[24:31]
+        # 1. FIND THE CLOSEST WALL
+        closest_dist = min(d)
+        closest_idx = d.index(closest_dist)
+
+        # 2. GENTLE HOMING MISSILE
+        # If the wall is further than our target, curve gently towards it.
+        if closest_dist > TARGET_WALL_DISTANCE + 0.3:
+            angle_to_wall = float(closest_idx * 10)
+            
+            # Convert to -180 to +180 format to find the shortest turn direction
+            if angle_to_wall > 180:
+                rel_angle = angle_to_wall - 360.0
+            else:
+                rel_angle = angle_to_wall
+                
+            # PHYSICS FIX: Cap the turn to max 30 degrees per step!
+            # This prevents Gazebo from severely undershooting large open-loop turns.
+            rel_angle = max(-30.0, min(30.0, rel_angle))
+            
+            # Convert back to 0-360 format for the Muscles
+            if rel_angle >= 0:
+                steer_angle = rel_angle
+            else:
+                steer_angle = 360.0 + rel_angle
+                
+            self.get_logger().info(f'Homing: target at {angle_to_wall}deg. Gently steering {steer_angle}deg.')
+            self._send(steer_angle, STEP_DISTANCE)
+            return
+
+        # 3. EMERGENCY CORNER AVOIDANCE / ALIGNMENT
+        # Since our target is 1.5m, if anything is closer than 1.5m in front, spin left to put it on our right!
+        front_dist = min(d[33:36] + d[0:3])
+        if front_dist < TARGET_WALL_DISTANCE:
+            self.get_logger().info('Wall in front! Spinning left to align.')
+            self._send(45.0, 0.0) # Spin Left in place
+            return
+
+        # 4. PI CONTROLLER: Wall Following
+        # Look at the broad right side (-140 to -40 degrees)
+        right_dists = d[22:32]
         wall_dist = min(right_dists)
+        
+        # Safety check: if the wall disappears completely, drift right to find it
+        if wall_dist > 5.0:
+            self.get_logger().info('Lost right wall. Drifting right.')
+            self._send(345.0, STEP_DISTANCE)
+            return
 
         error = wall_dist - TARGET_WALL_DISTANCE
+        
+        # Integral (Memory) update. Capped to prevent infinite windup
         self.pi_integral = max(-1.0, min(1.0, self.pi_integral + error))
-        correction = 1.2 * error + 0.15 * self.pi_integral
+        
+        # P = 35.0, I = 5.0
+        steer_deg = (error * 35.0) + (self.pi_integral * 5.0)
 
-        steer_deg = max(-60.0, min(60.0, correction * 30.0))
+        # Clamp max steering angle per step
+        steer_deg = max(-30.0, min(30.0, steer_deg))
 
-        if steer_deg >= 0:
-            angle = int(360 - steer_deg) % 360
+        # Convert to 0-360 Absolute angle
+        if steer_deg > 0:
+            # Positive error -> Too far -> Steer Right to get closer
+            angle = 360.0 - steer_deg
         else:
-            angle = int(-steer_deg)
+            # Negative error -> Too close -> Steer Left to get away
+            angle = abs(steer_deg)
 
         self._send(angle, STEP_DISTANCE)
 
