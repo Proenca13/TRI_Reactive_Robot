@@ -38,6 +38,8 @@ class RadarNode(Node):
             angle_rad = msg.angle_min + (i * msg.angle_increment)
             angle_deg = math.degrees(angle_rad) % 360.0
 
+            angle_deg = (-math.degrees(angle_rad) + 180.0) % 360.0 # Front is back  without this and left is right
+
             bin_index = int(round(angle_deg / 10.0)) % 36
 
             if distance < bins[bin_index]:
@@ -48,6 +50,7 @@ class RadarNode(Node):
 
         processed_data = Float32MultiArray()
         processed_data.data = bins
+        self.get_logger().info(f'Bins are: {bins}')
         self.publisher_.publish(processed_data)
 
         self.get_logger().info('RADAR: SNAP! Picture sent to Brain. Going to sleep.')
