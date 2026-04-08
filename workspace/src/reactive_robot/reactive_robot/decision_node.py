@@ -186,10 +186,9 @@ class DecisionNode(Node):
         # NARROW the cone to just 3 rays (30 degrees) instead of 60 degrees
         front_dists = [d[0], d[1], d[35]] 
         
-        # REDUCE the panic distance from 0.85m to 0.4m
-        if min(front_dists) < 0.4:
+        # INCREASE the panic distance back to 0.8m to match _wall_nearby
+        if min(front_dists) < 0.8:
             self._send(-1.0, 0.05)  # Spin right, creep forward slowly 
-            self.pi_integral = 0.0  # Reset PI memory
             return
 
         # 2. LEFT WALL ORBIT (PI Controller)
@@ -197,9 +196,6 @@ class DecisionNode(Node):
         wall_dist = min(left_dists)
         
         # 3. DOORWAY ENTRY 
-        # If the wall drops away completely, gently turn left to wrap around into the room
-        # 3. DOORWAY ENTRY 
-        # If the wall drops away completely, gently turn left to wrap around into the room
         if wall_dist > 1.5:
             self._send(0.8, 0.15) 
             return
