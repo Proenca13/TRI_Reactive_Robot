@@ -11,7 +11,7 @@ import math
 TARGET_WALL_DISTANCE = 0.5  # Desired distance to the wall (meters)
 FORWARD_SPEED = 0.2         # Base forward speed (m/s)
 MAX_ANGULAR = 1.0           # Maximum turning speed (rad/s)
-CENTERED_TOLERANCE = 0.1
+CENTERED_TOLERANCE = 0.05
 
 FRONT_IDX = 0
 LEFT_IDX = 9
@@ -31,9 +31,6 @@ class DecisionNode(Node):
         self.cmd_pub = self.create_publisher(Vector3, '/robot_command', 10)
 
         self.done = False
-
-        # PI — only allowed memory
-        self.pi_integral = 0.0
 
         self.get_logger().info('Decision node started (Continuous Reactive Mode)')
 
@@ -77,11 +74,11 @@ class DecisionNode(Node):
         return min(d) < 0.8
 
     def _inside_circle(self, d):
-        # BULLETPROOF CHECK: Instead of relying on the robot's rotation, 
-        # we just count how many rays are hitting a wall.
-        # If 24 or more rays hit a wall within 4.5 meters, we are fully enclosed!
+        # A straight wall covers ~180 degrees (approx 16-17 rays < 4.5m)
+        # The C-shape room covers ~225 degrees (approx 21-22 rays < 4.5m)
+        # 19 is the perfect reactive threshold to detect circle entry!
         rays_hitting_wall = sum(1 for dist in d if dist < 4.5)
-        return rays_hitting_wall >= 24
+        return rays_hitting_wall >= 19
 
     # NOTE: You can completely DELETE the _circle_detected and _enter_circle functions!
 
@@ -186,37 +183,50 @@ class DecisionNode(Node):
 
     def _wall_follow(self, d):
         # 1. FRONT COLLISION OVERRIDE (Alignment)
-        # Check a narrow cone directly in front of the robot (Bins 0-2 and 33-35)
-        front_dists = d[0:3] + d[33:36]
+        # NARROW the cone to just 3 rays (30 degrees) instead of 60 degrees
+        front_dists = [d[0], d[1], d[35]] 
         
-        # If a wall is physically blocking our forward path, 
-        # spin RIGHT to slide the wall onto our left shoulder!
-        if min(front_dists) < 0.85:
+        # REDUCE the panic distance from 0.85m to 0.4m
+        if min(front_dists) < 0.4:
             self._send(-1.0, 0.05)  # Spin right, creep forward slowly 
             self.pi_integral = 0.0  # Reset PI memory
             return
 
         # 2. LEFT WALL ORBIT (PI Controller)
-        # The front is clear! Look at the left side (Bins 4 to 13)
         left_dists = d[4:14]
         wall_dist = min(left_dists)
         
-        # If the wall drops away completely (e.g., an external corner)
-        # gently turn left to wrap around the corner and find it again.
+        # 3. DOORWAY ENTRY 
+        # If the wall drops away completely, gently turn left to wrap around into the room
+        # 3. DOORWAY ENTRY 
+        # If the wall drops away completely, gently turn left to wrap around into the room
         if wall_dist > 1.5:
             self._send(0.8, 0.15) 
-            self.pi_integral = 0.0
             return
 
-        # P/I controller math (positive correction = turn left towards wall)
-        error = wall_dist - TARGET_WALL_DISTANCE 
-        self.pi_integral = max(-1.0, min(1.0, self.pi_integral + error))
+        # ==========================================
+        # P/D CONTROLLER (SPATIAL DERIVATIVE)
+        # ==========================================
         
-        correction = (0.8 * error) + (0.1 * self.pi_integral)
+        # 1. Proportional (P) - Distance Error
+        error = wall_dist - TARGET_WALL_DISTANCE 
+        
+        # 2. Derivative (D) - Heading Error (Ray 6 is fwd-left, Ray 12 is back-left)
+        # If d[6] > d[12], we are facing away from the wall (needs positive left turn)
+        heading_error = d[6] - d[12]
+        
+        # Cap errors to prevent wild swings from sensor noise or doorway gaps
+        error = max(-0.5, min(0.5, error))
+        heading_error = max(-0.5, min(0.5, heading_error))
+        
+        # Combine distance correction and heading correction
+        # (You can tune these two multipliers!)
+        correction = (1.5 * error) + (0.8 * heading_error)
+        
         angular_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, correction))
 
         # Adaptive speed: drive faster if driving straight, slower if turning hard
-        adaptive_speed = FORWARD_SPEED if abs(angular_z) < 0.5 else 0.1
+        adaptive_speed = FORWARD_SPEED if abs(angular_z) < 0.3 else 0.1
 
         self._send(angular_z, adaptive_speed)
 
