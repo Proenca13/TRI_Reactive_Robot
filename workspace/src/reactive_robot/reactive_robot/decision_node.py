@@ -56,7 +56,6 @@ class DecisionNode(Node):
             return
 
         # --- Priority 3: wall nearby -> follow (Maze Strategy) ---
-        # The left-hand rule will naturally guide us through the door!
         if self._wall_nearby(d):
             self.get_logger().info('Wall nearby - Following')
             self._wall_follow(d)
@@ -74,14 +73,16 @@ class DecisionNode(Node):
         return min(d) < 0.8
 
     def _inside_circle(self, d):
-        # A straight wall covers ~180 degrees (approx 16-17 rays < 4.5m)
-        # The C-shape room covers ~225 degrees (approx 21-22 rays < 4.5m)
-        # 19 is the perfect reactive threshold to detect circle entry!
+        # Count how many rays hit a wall (detects if we are surrounded)
         rays_hitting_wall = sum(1 for dist in d if dist < 4.5)
-        return rays_hitting_wall >= 19
-
-    # NOTE: You can completely DELETE the _circle_detected and _enter_circle functions!
-
+        
+        # Count how many rays shoot into infinite open space
+        open_rays = sum(1 for dist in d if dist > 7.0)
+        
+        # If we have more than 10 rays (~100 degrees) of open space, 
+        # we are in the wide-open square bay, NOT the enclosed circle!
+        return (rays_hitting_wall >= 19) and (open_rays < 5)
+    
     def _get_exit_idx(self, d):
         # Vector-average all the rays looking through the gap to find the TRUE center
         max_val = max(d)
@@ -171,52 +172,53 @@ class DecisionNode(Node):
     # Actions
     # -----------------------------------------------------------------------
 
-    def _enter_circle(self, d):
-        # Steer towards the true center of the gap
-        exit_idx = self._get_exit_idx(d)
-        angle_error = self._idx_to_rad(exit_idx)
-        
-        angular_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, angle_error * 1.5))
-        # Drive slower while entering so we don't clip the walls!
-        self._send(angular_z, FORWARD_SPEED * 0.5) 
-
-
     def _wall_follow(self, d):
         # 1. FRONT COLLISION OVERRIDE (Alignment)
-        # NARROW the cone to just 3 rays (30 degrees) instead of 60 degrees
         front_dists = [d[0], d[1], d[35]] 
         
-        # INCREASE the panic distance back to 0.8m to match _wall_nearby
-        if min(front_dists) < 0.8:
+        if min(front_dists) < 0.7:
             self._send(-1.0, 0.05)  # Spin right, creep forward slowly 
             return
 
-        # 2. LEFT WALL ORBIT (PI Controller)
-        left_dists = d[4:14]
-        wall_dist = min(left_dists)
+        # 2. EARLY GAP DETECTION (The "Invisible Wall" Override)
+        # STRICTLY sideways: We ignore ray 7 so that turning right 
+        # doesn't cause the front-left sensor to clip the corner and cancel the jump!
+        left_gap_dists = d[8:11] 
         
-        # 3. DOORWAY ENTRY 
-        if wall_dist > 1.5:
-            self._send(0.8, 0.15) 
+        if min(left_gap_dists) > 1.5:
+            
+            # Check the right side to see if we are outside or in a corridor
+            right_dists = d[24:30]
+            right_is_open = min(right_dists) > 2.0
+            
+            if right_is_open:
+                # TOP OPENING: Detach and jump!
+                # Steer right a bit harder (-0.25) to safely clear the corner
+                self._send(-0.25, FORWARD_SPEED) 
+            else:
+                # BOTTOM CIRCLE: Dive in!
+                self._send(0.8, 0.15) 
             return
 
         # ==========================================
-        # P/D CONTROLLER (SPATIAL DERIVATIVE)
+        # 3. P/D CONTROLLER (STANDARD WALL FOLLOWING)
         # ==========================================
+        # NARROWED VISION: Only look at rays 7 to 11 so the robot doesn't
+        # try to "chase" the curving wall in front of it into the bay.
+        left_dists = d[7:12]
+        wall_dist = min(left_dists)
         
         # 1. Proportional (P) - Distance Error
         error = wall_dist - TARGET_WALL_DISTANCE 
         
-        # 2. Derivative (D) - Heading Error (Ray 6 is fwd-left, Ray 12 is back-left)
-        # If d[6] > d[12], we are facing away from the wall (needs positive left turn)
-        heading_error = d[6] - d[12]
+        # 2. Derivative (D) - Heading Error (Ray 7 is fwd-left, Ray 11 is back-left)
+        heading_error = d[7] - d[11]
         
-        # Cap errors to prevent wild swings from sensor noise or doorway gaps
+        # Cap errors to prevent wild swings from sensor noise
         error = max(-0.5, min(0.5, error))
         heading_error = max(-0.5, min(0.5, heading_error))
         
         # Combine distance correction and heading correction
-        # (You can tune these two multipliers!)
         correction = (1.5 * error) + (0.8 * heading_error)
         
         angular_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, correction))
