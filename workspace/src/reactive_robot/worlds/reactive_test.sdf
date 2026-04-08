@@ -12,7 +12,7 @@
     </plugin>
 
     <light name="sun" type="directional">
-      <cast_shadows>false</cast_shadows>
+      <cast_shadows>true</cast_shadows>
       <pose>0 0 10 0 0 0</pose>
       <diffuse>0.8 0.8 0.8 1</diffuse>
       <specular>0.2 0.2 0.2 1</specular>
@@ -47,13 +47,13 @@
 
     <model name="shape_5_walls">
       <static>true</static>
-      <pose>-4.0 4.0 0.5 1.5708 0 0</pose>
+      <pose>0 0 0 0 0 0</pose> 
       <link name="walls_link">
+        
         <collision name="collision">
           <geometry>
             <mesh>
-              <uri>shape_5.STL</uri>
-              <scale>100 100 100</scale>
+              <uri>shape_5.obj</uri>
             </mesh>
           </geometry>
         </collision>
@@ -61,8 +61,7 @@
         <visual name="visual">
           <geometry>
             <mesh>
-              <uri>shape_5.STL</uri>
-              <scale>100 100 100</scale>
+              <uri>shape_5.obj</uri>
             </mesh>
           </geometry>
           <material>
