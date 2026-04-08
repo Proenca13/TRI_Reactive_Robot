@@ -2,16 +2,16 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 from geometry_msgs.msg import Vector3
-import random
+import math
 
 # ---------------------------------------------------------------------------
-# Tuning parameters (only what cannot be derived mathematically)
+# Tuning parameters
 # ---------------------------------------------------------------------------
 
-TARGET_WALL_DISTANCE = 0.3
-STEP_DISTANCE = 0.1
-CENTERED_TOLERANCE = 0.05
-JUMP_FACTOR = 3.0  # how abrupt the jump at the circle opening must be
+TARGET_WALL_DISTANCE = 0.5  # Desired distance to the wall (meters)
+FORWARD_SPEED = 0.2         # Base forward speed (m/s)
+MAX_ANGULAR = 1.0           # Maximum turning speed (rad/s)
+CENTERED_TOLERANCE = 0.1
 
 FRONT_IDX = 0
 LEFT_IDX = 9
@@ -28,230 +28,215 @@ class DecisionNode(Node):
         self.scan_sub = self.create_subscription(
             Float32MultiArray, '/processed_scan', self.scan_callback, 10)
 
-        self.done_sub = self.create_subscription(
-            Vector3, '/done', self.done_callback, 10)
-
         self.cmd_pub = self.create_publisher(Vector3, '/robot_command', 10)
 
-        self.waiting = False
-        self.last_scan = None
         self.done = False
 
         # PI — only allowed memory
         self.pi_integral = 0.0
 
-        self.get_logger().info('Decision node started')
+        self.get_logger().info('Decision node started (Continuous Reactive Mode)')
 
     def scan_callback(self, msg: Float32MultiArray):
-        self.last_scan = list(msg.data)
-        if not self.waiting:
-            self.step()
-
-    def done_callback(self, _msg: Vector3):
-        self.waiting = False
-
-    def step(self):
-        if self.last_scan is None or self.waiting or self.done:
+        if self.done:
             return
+            
+        d = list(msg.data)
+        self.step(d)
 
-        d = self.last_scan
-
+    def step(self, d):
         # --- Priority 1: centered inside circle and heading out -> stop ---
         if self._inside_circle(d) and self._is_centered(d):
             self.get_logger().info('Centered and heading out! Mission complete.')
-            self._send(0, 0.0, stop=True)
+            self._send(0.0, 0.0, stop=True)
             self.done = True
             return
 
         # --- Priority 2: inside circle -> center and orient ---
         if self._inside_circle(d):
-            self.get_logger().info('Inside circle')
+            self.get_logger().info('Inside circle - Centering')
             self._center(d)
             return
 
-        # --- Priority 3: circular wall detected -> enter ---
-        if self._circle_detected(d):
-            self.get_logger().info('Circle Detected')
-            self._enter_circle(d)
-            return
-
-        # --- Priority 4: wall nearby -> follow ---
+        # --- Priority 3: wall nearby -> follow (Maze Strategy) ---
+        # The left-hand rule will naturally guide us through the door!
         if self._wall_nearby(d):
-            self.get_logger().info('Wall nearby')
+            self.get_logger().info('Wall nearby - Following')
             self._wall_follow(d)
             return
 
-        # --- Priority 5: no wall -> random movement ---
+        # --- Priority 4: no wall -> random movement ---
+        self.get_logger().info('Wandering to find wall')
         self._wander(d)
-        self.get_logger().info('Wander, going to the 5')
 
     # -----------------------------------------------------------------------
     # Predicates
     # -----------------------------------------------------------------------
 
-    def _find_pairs(self, d):
-        max_idx = d.index(max(d))
-
-        def near_opening(idx):
-            diff = min(abs(idx - max_idx), 36 - abs(idx - max_idx))
-            return diff <= 3
-
-        pair1 = None
-        for i in range(1, 18):
-            idx_a = (max_idx + i) % 36
-            idx_b = (max_idx + i + 18) % 36
-            if not near_opening(idx_a) and not near_opening(idx_b):
-                pair1 = (idx_a, idx_b)
-                break
-
-        if pair1 is None:
-            return None, None
-
-        pair2 = None
-        for i in range(pair1[0] + 7, pair1[0] + 12):
-            idx_a = i % 36
-            idx_b = (i + 18) % 36
-            if not near_opening(idx_a) and not near_opening(idx_b):
-                pair2 = (idx_a, idx_b)
-                break
-
-        return pair1, pair2
-
     def _wall_nearby(self, d):
-        # Wall is nearby if the minimum distance is strictly less than the mean
-        return min(d) < TARGET_WALL_DISTANCE * 3  # ex: < 0.9m
+        return min(d) < 0.8
 
     def _inside_circle(self, d):
-        # Choose 4 cardinal directions with the maximum guaranteed in one of them
-        # If 3 out of 4 are smaller than the maximum -> robot is inside the circle
-        max_idx = d.index(max(d))
-        cardinals = [
-            d[max_idx],
-            d[(max_idx + 9) % 36],
-            d[(max_idx + 18) % 36],
-            d[(max_idx + 27) % 36],
-        ]
-        max_val = max(cardinals)
-        return sum(1 for v in cardinals if v < max_val) >= 3
+        # BULLETPROOF CHECK: Instead of relying on the robot's rotation, 
+        # we just count how many rays are hitting a wall.
+        # If 24 or more rays hit a wall within 4.5 meters, we are fully enclosed!
+        rays_hitting_wall = sum(1 for dist in d if dist < 4.5)
+        return rays_hitting_wall >= 24
+
+    # NOTE: You can completely DELETE the _circle_detected and _enter_circle functions!
+
+    def _get_exit_idx(self, d):
+        # Vector-average all the rays looking through the gap to find the TRUE center
+        max_val = max(d)
+        x = 0.0
+        y = 0.0
+        for i, val in enumerate(d):
+            if val >= max_val - 0.2:
+                angle = self._idx_to_rad(i)
+                x += math.cos(angle)
+                y += math.sin(angle)
+                
+        angle_rad = math.atan2(y, x)
+        angle_deg = math.degrees(angle_rad)
+        if angle_deg < 0:
+            angle_deg += 360.0
+            
+        return int(round(angle_deg / 10.0)) % 36
+
+    def _get_room_center(self, d):
+        xs = []
+        ys = []
+        for i, dist in enumerate(d):
+            if dist < 4.5:  # Ignore the door opening (the 8.0s)
+                angle = self._idx_to_rad(i)
+                # Convert polar (distance, angle) to cartesian (x, y)
+                xs.append(dist * math.cos(angle))
+                ys.append(dist * math.sin(angle))
+        
+        if not xs:
+            return 0.0, 0.0
+            
+        # The Bounding Box Trick: Halfway between the extremes is the perfect center!
+        cx = (min(xs) + max(xs)) / 2.0
+        cy = (min(ys) + max(ys)) / 2.0
+        return cx, cy
 
     def _is_centered(self, d):
-        max_idx = d.index(max(d))
-        heading_out = (max_idx == FRONT_IDX)
-
-        pair1, pair2 = self._find_pairs(d)
-        if pair1 is None or pair2 is None:
-            return False
+        cx, cy = self._get_room_center(d)
+        dist_to_center = math.hypot(cx, cy)
         
-        self.get_logger().info(f'max_idx={max_idx} pair1={pair1} pair2={pair2}')
-        if pair1:
-            self.get_logger().info(f'pair1 vals: {d[pair1[0]]:.2f} vs {d[pair1[1]]:.2f}')
-        if pair2:
-            self.get_logger().info(f'pair2 vals: {d[pair2[0]]:.2f} vs {d[pair2[1]]:.2f}')
+        # Find the exact middle of the doorway using circular mean
+        max_val = max(d)
+        door_indices = [i for i, val in enumerate(d) if val == max_val]
+        sum_sin = sum(math.sin(self._idx_to_rad(i)) for i in door_indices)
+        sum_cos = sum(math.cos(self._idx_to_rad(i)) for i in door_indices)
+        angle_to_exit = math.atan2(sum_sin, sum_cos)
+        
+        # We are done if we are physically in the center AND facing the door
+        return dist_to_center < 0.25 and abs(angle_to_exit) < 0.2
 
-        pair1_err = d[pair1[0]] - d[pair1[1]]
-        pair2_err = d[pair2[0]] - d[pair2[1]]
+    def _center(self, d):
+        cx, cy = self._get_room_center(d)
+        dist_to_center = math.hypot(cx, cy)
+        
+        # Calculate where the door is
+        max_val = max(d)
+        door_indices = [i for i, val in enumerate(d) if val == max_val]
+        sum_sin = sum(math.sin(self._idx_to_rad(i)) for i in door_indices)
+        sum_cos = sum(math.cos(self._idx_to_rad(i)) for i in door_indices)
+        angle_to_exit = math.atan2(sum_sin, sum_cos)
+        
+        # 1. Drive to the geographical center first
+        if dist_to_center > 0.25:
+            angle_to_center = math.atan2(cy, cx)
+            # Steer towards the geometric center
+            angular_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, angle_to_center * 2.0))
+            # Drive forward, slowing down if a sharp turn is needed
+            linear_x = 0.2 if abs(angle_to_center) < 0.5 else 0.05
+            self._send(angular_z, linear_x)
+            return
+            
+        # 2. Once perfectly centered geographically, spin in place to face the door
+        angular_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, angle_to_exit * 1.5))
+        self._send(angular_z, 0.0)
 
-        centered = abs(pair1_err) < CENTERED_TOLERANCE and \
-                abs(pair2_err) < CENTERED_TOLERANCE
+    # -----------------------------------------------------------------------
+    # Helper Math
+    # -----------------------------------------------------------------------
 
-        return centered and heading_out
+    def _idx_to_rad(self, idx):
+        angle_deg = idx * 10.0
+        if angle_deg > 180:
+            angle_deg -= 360.0
+        return math.radians(angle_deg)
 
-    def _circle_detected(self, d):
-    # Starting from 270 (RIGHT_IDX), scan outward in both directions
-    # looking for an abrupt jump compared to the gradual slope so far.
-    # A circle opening creates a smooth decrease from 270 outward,
-    # followed by a sudden drop when the arc ends.
-        def find_jump(start, step):
-            diffs = []
-            idx = start
-            for _ in range(18):  # at most half the scan
-                next_idx = (idx + step) % 36
-                diff = abs(d[next_idx] - d[idx])
-                if diffs:
-                    avg = sum(diffs) / len(diffs)
-                    # Jump is abrupt if current diff >> average of previous diffs
-                    #self.get_logger().info(f'idx={idx} next={next_idx} diff={diff:.2f} avg={avg:.2f} ratio={diff/avg if avg>0 else 0:.2f}')
-
-                    if avg > 0 and diff > JUMP_FACTOR * avg:
-                        return True
-                diffs.append(diff)
-                idx = next_idx
-            return False
-
-        # Must find a jump in both directions from 270
-        jump_toward_front = find_jump(RIGHT_IDX, -1)  # 270 -> 0
-        jump_toward_back = find_jump(RIGHT_IDX,  1)  # 270 -> 180
-        self.get_logger().info(f'find_jump: toward_front={jump_toward_front} toward_back={jump_toward_back}')
-        return jump_toward_front and jump_toward_back
     # -----------------------------------------------------------------------
     # Actions
     # -----------------------------------------------------------------------
 
     def _enter_circle(self, d):
-        # Move toward the largest gap (the circle opening)
-        max_idx = d.index(max(d))
-        self._send(max_idx * 10, STEP_DISTANCE)
+        # Steer towards the true center of the gap
+        exit_idx = self._get_exit_idx(d)
+        angle_error = self._idx_to_rad(exit_idx)
+        
+        angular_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, angle_error * 1.5))
+        # Drive slower while entering so we don't clip the walls!
+        self._send(angular_z, FORWARD_SPEED * 0.5) 
 
-    def _center(self, d):
-        max_idx = d.index(max(d))
-
-        pair1, pair2 = self._find_pairs(d)
-        if pair1 is None or pair2 is None:
-            return
-
-        pair1_err = d[pair1[0]] - d[pair1[1]]
-        pair2_err = d[pair2[0]] - d[pair2[1]]
-
-        if abs(pair1_err) < CENTERED_TOLERANCE and \
-        abs(pair2_err) < CENTERED_TOLERANCE:
-            self._send(max_idx * 10, 0.0)
-            return
-
-        if abs(pair1_err) >= abs(pair2_err):
-            angle = (pair1[1] * 10) if pair1_err > 0 else (pair1[0] * 10)
-            move_dist = abs(pair1_err) / 2.0
-        else:
-            angle = (pair2[1] * 10) if pair2_err > 0 else (pair2[0] * 10)
-            move_dist = abs(pair2_err) / 2.0
-
-        self._send(angle, move_dist)
 
     def _wall_follow(self, d):
-        # PI controller for right-side wall following
-        right_dists = d[24:31]
-        wall_dist = min(right_dists)
+        # 1. FRONT COLLISION OVERRIDE (Alignment)
+        # Check a narrow cone directly in front of the robot (Bins 0-2 and 33-35)
+        front_dists = d[0:3] + d[33:36]
+        
+        # If a wall is physically blocking our forward path, 
+        # spin RIGHT to slide the wall onto our left shoulder!
+        if min(front_dists) < 0.85:
+            self._send(-1.0, 0.05)  # Spin right, creep forward slowly 
+            self.pi_integral = 0.0  # Reset PI memory
+            return
 
-        error = wall_dist - TARGET_WALL_DISTANCE
+        # 2. LEFT WALL ORBIT (PI Controller)
+        # The front is clear! Look at the left side (Bins 4 to 13)
+        left_dists = d[4:14]
+        wall_dist = min(left_dists)
+        
+        # If the wall drops away completely (e.g., an external corner)
+        # gently turn left to wrap around the corner and find it again.
+        if wall_dist > 1.5:
+            self._send(0.8, 0.15) 
+            self.pi_integral = 0.0
+            return
+
+        # P/I controller math (positive correction = turn left towards wall)
+        error = wall_dist - TARGET_WALL_DISTANCE 
         self.pi_integral = max(-1.0, min(1.0, self.pi_integral + error))
-        correction = 1.2 * error + 0.15 * self.pi_integral
+        
+        correction = (0.8 * error) + (0.1 * self.pi_integral)
+        angular_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, correction))
 
-        steer_deg = max(-60.0, min(60.0, correction * 30.0))
+        # Adaptive speed: drive faster if driving straight, slower if turning hard
+        adaptive_speed = FORWARD_SPEED if abs(angular_z) < 0.5 else 0.1
 
-        if steer_deg >= 0:
-            angle = int(360 - steer_deg) % 360
-        else:
-            angle = int(-steer_deg)
-
-        self._send(angle, STEP_DISTANCE)
+        self._send(angular_z, adaptive_speed)
 
     def _wander(self, d):
+        # Steer gently towards the closest object to find a wall
         min_idx = d.index(min(d))
-        self.get_logger().info(f'min distance is {min(d)}')
-        self._send(min_idx * 10, STEP_DISTANCE * 5)
+        angle_error = self._idx_to_rad(min_idx)
+        
+        angular_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, angle_error * 0.5))
+        self._send(angular_z, FORWARD_SPEED)
 
     # -----------------------------------------------------------------------
 
-    def _send(self, angle: float, distance: float, stop: bool = False):
+    def _send(self, angular_z: float, linear_x: float, stop: bool = False):
         msg = Vector3()
-        msg.x = float(angle)
-        msg.y = float(distance)
+        msg.x = float(angular_z)
+        msg.y = float(linear_x)
         msg.z = 1.0 if stop else 0.0
         self.cmd_pub.publish(msg)
-        self.waiting = True
-        self.get_logger().info(f'cmd angle={angle:.0f} dist={distance:.2f}m stop={stop}')
 
-
-# ---------------------------------------------------------------------------
 
 def main(args=None):
     rclpy.init(args=args)
@@ -264,7 +249,6 @@ def main(args=None):
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()
