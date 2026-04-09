@@ -12,7 +12,7 @@ def generate_launch_description():
     pkg_share = get_package_share_directory('reactive_robot')
     worlds_dir = os.path.join(pkg_share, 'worlds')
 
-    # Define paths to both the world AND the robot files
+    # Paths to both the world AND the robot files
     world_path = os.path.join(worlds_dir, 'reactive_test.sdf')
     robot_path = os.path.join(worlds_dir, 'reactive_bot.sdf')
 
@@ -32,16 +32,17 @@ def generate_launch_description():
         launch_arguments={'gz_args': f'-r "{world_path}"'}.items()
     )
 
-    SAFE_X_MIN = -7.0
-    SAFE_X_MAX = -4.0
-    SAFE_Y_MIN = 0.0
-    SAFE_Y_MAX = 4.0
+    SAFE_ZONES = [
+        [-7.0, -4.5, -5.0,  4.0],  # Left Zone
+        [ 2.5,  5.0, -5.0,  4.0],  # Right Zone
+        [-7.0,  5.0, -8.0, -6.0],  # Top Zone (Y < -5)
+        [-7.0,  5.0,  5.0,  7.0]   # Bottom Zone (Y > 4)
+    ]
 
-    # Generate random starting coordinates strictly within the safe zone
-    spawn_x = str(random.uniform(SAFE_X_MIN, SAFE_X_MAX))
-    spawn_y = str(random.uniform(SAFE_Y_MIN, SAFE_Y_MAX))
-    
-    # Random heading is fully random (360 degrees)
+    #Pick a random zone and spawn the robot
+    chosen_zone = random.choice(SAFE_ZONES)
+    spawn_x = str(random.uniform(chosen_zone[0], chosen_zone[1]))
+    spawn_y = str(random.uniform(chosen_zone[2], chosen_zone[3]))
     spawn_yaw = str(random.uniform(-3.14159, 3.14159))
 
     # Node to inject the robot into Gazebo at the random coordinates
