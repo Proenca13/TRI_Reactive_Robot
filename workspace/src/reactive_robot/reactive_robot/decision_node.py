@@ -74,67 +74,66 @@ class DecisionNode(Node):
         return min(d) < 0.8
 
     def _inside_circle(self, d):
-        # 1. Convert rays to (x, y), ignoring rays that escaped to infinity
-        points = []
+        xs = []
+        ys = []
+
+        # 1. Convert valid radar rays to Cartesian coordinates
         for i, dist in enumerate(d):
+            # Filter out rays shooting into open space or infinite distance
             if dist < 7.0:
                 angle = self._idx_to_rad(i)
-                points.append((dist * math.cos(angle), dist * math.sin(angle)))
+                xs.append(dist * math.cos(angle))
+                ys.append(dist * math.sin(angle))
 
-        if len(points) < 10:
+        # We need at least 3 points to fit a circle, but for a reliable
+        # detection in a 36-ray setup, we should demand a decent number of hits.
+        if len(xs) < 15:
             return False
 
-        # 2. Build normal equations for: x²+y² = 2ax + 2by + c  (Kasa method)
-        #    A is (n x 3), unknowns are [a, b, c]
-        n = len(points)
-        AtA = [[0.0] * 3 for _ in range(3)]
-        Atb = [0.0] * 3
+        x = np.array(xs)
+        y = np.array(ys)
 
-        for x, y in points:
-            row = [2 * x, 2 * y, 1.0]
-            rhs = x ** 2 + y ** 2
-            for r in range(3):
-                Atb[r] += row[r] * rhs
-                for c in range(3):
-                    AtA[r][c] += row[r] * row[c]
+        # 2. Set up the least squares system: A * [A, B, C]^T = b
+        # A_mat is [x, y, 1], b_vec is x^2 + y^2
+        A_mat = np.c_[x, y, np.ones(len(x))]
+        b_vec = x ** 2 + y ** 2
 
-        # 3. Solve 3x3 system via Gaussian elimination
-        def solve_3x3(M, b):
-            aug = [M[i][:] + [b[i]] for i in range(3)]
-            for col in range(3):
-                pivot = max(range(col, 3), key=lambda r: abs(aug[r][col]))
-                aug[col], aug[pivot] = aug[pivot], aug[col]
-                if abs(aug[col][col]) < 1e-10:
-                    return None
-                for row in range(col + 1, 3):
-                    f = aug[row][col] / aug[col][col]
-                    for k in range(col, 4):
-                        aug[row][k] -= f * aug[col][k]
-            x = [0.0] * 3
-            for i in range(2, -1, -1):
-                x[i] = aug[i][3]
-                for j in range(i + 1, 3):
-                    x[i] -= aug[i][j] * x[j]
-                x[i] /= aug[i][i]
-            return x
-
-        result = solve_3x3(AtA, Atb)
-        if result is None:
+        # Solve for coefficients A, B, C
+        try:
+            c, _, _, _ = np.linalg.lstsq(A_mat, b_vec, rcond=None)
+            A, B, C = c
+        except np.linalg.LinAlgError:
+            # Failsafe in case the matrix is singular (points are perfectly co-linear)
             return False
 
-        a, b, c = result
-        r_sq = c + a ** 2 + b ** 2
-        if r_sq <= 0:
+        # 3. Calculate center and radius from coefficients
+        cx = A / 2.0
+        cy = B / 2.0
+
+        # Ensure the value inside sqrt is positive (it should be for real circles)
+        radius_sq = cx ** 2 + cy ** 2 + C
+        if radius_sq < 0:
             return False
-        radius = math.sqrt(r_sq)
+        radius = np.sqrt(radius_sq)
 
-        # 4. Mean residual — how well do points actually lie on this circle?
-        mean_residual = sum(
-            abs(math.hypot(x - a, y - b) - radius) for x, y in points
-        ) / len(points)
+        # 4. Calculate the Mean Absolute Error (residuals)
+        # Distance from each real point to our calculated center
+        distances_to_center = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
 
-        # 5. Good fit + sane radius = we are inside a circle
-        return mean_residual < 0.25 and 0.5 < radius < 5.0
+        # How far off is each point from the calculated radius?
+        residuals = np.abs(distances_to_center - radius)
+        mean_error = np.mean(residuals)
+
+        # 5. Evaluate if the shape is actually a circle
+        # TUNING REQUIRED: Adjust these based on your specific environment!
+        MAX_ERROR_THRESHOLD = 0.25  # Lower means it demands a more perfect circle
+        MIN_EXPECTED_RADIUS = 1.0  # Minimum size of the circle you are looking for
+        MAX_EXPECTED_RADIUS = 4.0  # Maximum size of the circle you are looking for
+
+        is_circular = mean_error < MAX_ERROR_THRESHOLD
+        is_correct_size = MIN_EXPECTED_RADIUS < radius < MAX_EXPECTED_RADIUS
+
+        return is_circular and is_correct_size
     
     def _get_exit_idx(self, d):
         max_val = max(d)
