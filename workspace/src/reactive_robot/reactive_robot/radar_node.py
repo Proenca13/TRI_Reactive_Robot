@@ -2,7 +2,6 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Float32MultiArray
-from geometry_msgs.msg import Vector3
 import math
 
 class RadarNode(Node):
@@ -13,21 +12,14 @@ class RadarNode(Node):
             LaserScan, '/scan', self.listener_callback, 10)
             
         self.publisher_ = self.create_publisher(Float32MultiArray, '/processed_scan', 10)
-        self.done_sub = self.create_subscription(
-            Vector3, '/done', self.done_callback, 10)
             
-        self.can_publish = True 
-        self.get_logger().info('Radar node started: Turn-Based Mode')
+        # REMOVED the self.done_sub and self.can_publish variable
+        
+        self.get_logger().info('Radar node started: Continuous Mode')
     
-    def done_callback(self, msg: Vector3):
-        # The wheels finished moving! We are allowed to take a fresh picture.
-        self.get_logger().info('RADAR: Received /done signal! Waking up for next picture.')
-        self.can_publish = True
+    # REMOVED the done_callback function entirely
 
     def listener_callback(self, msg: LaserScan):
-        # If the robot is currently moving, IGNORE the blurry laser scans!
-        if not self.can_publish:
-            return
         
         bins = [float('inf')] * 36
 
@@ -37,8 +29,6 @@ class RadarNode(Node):
 
             angle_rad = msg.angle_min + (i * msg.angle_increment)
             angle_deg = math.degrees(angle_rad) % 360.0
-
-            angle_deg = (-math.degrees(angle_rad) + 180.0) % 360.0 # Front is back  without this and left is right
 
             bin_index = int(round(angle_deg / 10.0)) % 36
 
@@ -50,11 +40,11 @@ class RadarNode(Node):
 
         processed_data = Float32MultiArray()
         processed_data.data = bins
-        self.get_logger().info(f'Bins are: {bins}')
+        
+        # Tip: You might want to comment out this logger if it prints too fast in continuous mode!
+        self.get_logger().info(f'Bins are: {bins}') 
+        
         self.publisher_.publish(processed_data)
-
-        self.get_logger().info('RADAR: SNAP! Picture sent to Brain. Going to sleep.')
-        self.can_publish = False
 
 
 def main(args=None):
