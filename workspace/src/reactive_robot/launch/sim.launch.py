@@ -43,6 +43,7 @@ def generate_launch_description():
     chosen_zone = random.choice(SAFE_ZONES)
     spawn_x = str(random.uniform(chosen_zone[0], chosen_zone[1]))
     spawn_y = str(random.uniform(chosen_zone[2], chosen_zone[3]))
+    #Random heading
     spawn_yaw = str(random.uniform(-3.14159, 3.14159))
 
     # Node to inject the robot into Gazebo at the random coordinates
