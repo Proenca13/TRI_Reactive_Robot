@@ -74,15 +74,67 @@ class DecisionNode(Node):
         return min(d) < 0.8
 
     def _inside_circle(self, d):
-        # Count how many rays hit a wall (detects if we are surrounded)
-        rays_hitting_wall = sum(1 for dist in d if dist < 4.5)
-        
-        # Count how many rays shoot into infinite open space
-        open_rays = sum(1 for dist in d if dist > 7.0)
-        
-        # If we have more than 5 rays of open space, 
-        # we are in the wide-open square bay, NOT the enclosed circle.
-        return (rays_hitting_wall >= 19) and (open_rays < 5)
+        # 1. Convert rays to (x, y), ignoring rays that escaped to infinity
+        points = []
+        for i, dist in enumerate(d):
+            if dist < 7.0:
+                angle = self._idx_to_rad(i)
+                points.append((dist * math.cos(angle), dist * math.sin(angle)))
+
+        if len(points) < 10:
+            return False
+
+        # 2. Build normal equations for: x²+y² = 2ax + 2by + c  (Kasa method)
+        #    A is (n x 3), unknowns are [a, b, c]
+        n = len(points)
+        AtA = [[0.0] * 3 for _ in range(3)]
+        Atb = [0.0] * 3
+
+        for x, y in points:
+            row = [2 * x, 2 * y, 1.0]
+            rhs = x ** 2 + y ** 2
+            for r in range(3):
+                Atb[r] += row[r] * rhs
+                for c in range(3):
+                    AtA[r][c] += row[r] * row[c]
+
+        # 3. Solve 3x3 system via Gaussian elimination
+        def solve_3x3(M, b):
+            aug = [M[i][:] + [b[i]] for i in range(3)]
+            for col in range(3):
+                pivot = max(range(col, 3), key=lambda r: abs(aug[r][col]))
+                aug[col], aug[pivot] = aug[pivot], aug[col]
+                if abs(aug[col][col]) < 1e-10:
+                    return None
+                for row in range(col + 1, 3):
+                    f = aug[row][col] / aug[col][col]
+                    for k in range(col, 4):
+                        aug[row][k] -= f * aug[col][k]
+            x = [0.0] * 3
+            for i in range(2, -1, -1):
+                x[i] = aug[i][3]
+                for j in range(i + 1, 3):
+                    x[i] -= aug[i][j] * x[j]
+                x[i] /= aug[i][i]
+            return x
+
+        result = solve_3x3(AtA, Atb)
+        if result is None:
+            return False
+
+        a, b, c = result
+        r_sq = c + a ** 2 + b ** 2
+        if r_sq <= 0:
+            return False
+        radius = math.sqrt(r_sq)
+
+        # 4. Mean residual — how well do points actually lie on this circle?
+        mean_residual = sum(
+            abs(math.hypot(x - a, y - b) - radius) for x, y in points
+        ) / len(points)
+
+        # 5. Good fit + sane radius = we are inside a circle
+        return mean_residual < 0.25 and 0.5 < radius < 5.0
     
     def _get_exit_idx(self, d):
         max_val = max(d)
