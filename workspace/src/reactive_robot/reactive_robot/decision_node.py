@@ -4,6 +4,7 @@ from std_msgs.msg import Float32MultiArray
 from geometry_msgs.msg import Vector3
 import math
 import time
+import numpy as np
 
 # ---------------------------------------------------------------------------
 # Tuning parameters
@@ -76,64 +77,91 @@ class DecisionNode(Node):
     def _inside_circle(self, d):
         xs = []
         ys = []
+        open_rays = 0
 
-        # 1. Convert valid radar rays to Cartesian coordinates
+        # 1. Filter rays and count open space
         for i, dist in enumerate(d):
-            # Filter out rays shooting into open space or infinite distance
-            if dist < 7.0:
+            if dist > 7.0:
+                open_rays += 1
+            else:
                 angle = self._idx_to_rad(i)
                 xs.append(dist * math.cos(angle))
                 ys.append(dist * math.sin(angle))
 
-        # We need at least 3 points to fit a circle, but for a reliable
-        # detection in a 36-ray setup, we should demand a decent number of hits.
+        # INCREASED SAFEGUARD: The opening in the '5' is large.
+        # We allow up to 10 rays to shoot into infinite space now.
+        if open_rays > 10:
+            return False
+
         if len(xs) < 15:
             return False
 
         x = np.array(xs)
         y = np.array(ys)
 
-        # 2. Set up the least squares system: A * [A, B, C]^T = b
-        # A_mat is [x, y, 1], b_vec is x^2 + y^2
-        A_mat = np.c_[x, y, np.ones(len(x))]
-        b_vec = x ** 2 + y ** 2
-
-        # Solve for coefficients A, B, C
+        # ---------------------------------------------------------
+        # PASS 1: Rough Fit (Includes flat walls / noise)
+        # ---------------------------------------------------------
+        A_mat1 = np.c_[x, y, np.ones(len(x))]
+        b_vec1 = x ** 2 + y ** 2
         try:
-            c, _, _, _ = np.linalg.lstsq(A_mat, b_vec, rcond=None)
-            A, B, C = c
+            c1, _, _, _ = np.linalg.lstsq(A_mat1, b_vec1, rcond=None)
+            cx1, cy1 = c1[0] / 2.0, c1[1] / 2.0
+            r_sq1 = cx1 ** 2 + cy1 ** 2 + c1[2]
+            if r_sq1 < 0: return False
+            r1 = np.sqrt(r_sq1)
         except np.linalg.LinAlgError:
-            # Failsafe in case the matrix is singular (points are perfectly co-linear)
             return False
 
-        # 3. Calculate center and radius from coefficients
-        cx = A / 2.0
-        cy = B / 2.0
+        # Calculate how far each point is from the ROUGH circle
+        dist1 = np.sqrt((x - cx1) ** 2 + (y - cy1) ** 2)
+        residuals1 = np.abs(dist1 - r1)
 
-        # Ensure the value inside sqrt is positive (it should be for real circles)
-        radius_sq = cx ** 2 + cy ** 2 + C
-        if radius_sq < 0:
+        # ---------------------------------------------------------
+        # PASS 2: Clean Fit (Discard flat walls)
+        # ---------------------------------------------------------
+        # Keep only points that are within 0.6 meters of our rough circle guess.
+        # This effectively filters out the straight tail of the '5'.
+        mask = residuals1 < 0.6
+        x_clean = x[mask]
+        y_clean = y[mask]
+
+        # If we threw away too many points, it wasn't a circle to begin with
+        if len(x_clean) < 10:
             return False
-        radius = np.sqrt(radius_sq)
 
-        # 4. Calculate the Mean Absolute Error (residuals)
-        # Distance from each real point to our calculated center
-        distances_to_center = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+        # Recalculate using ONLY the clean, curved points
+        A_mat2 = np.c_[x_clean, y_clean, np.ones(len(x_clean))]
+        b_vec2 = x_clean ** 2 + y_clean ** 2
+        try:
+            c2, _, _, _ = np.linalg.lstsq(A_mat2, b_vec2, rcond=None)
+            cx, cy = c2[0] / 2.0, c2[1] / 2.0
+            r_sq2 = cx ** 2 + cy ** 2 + c2[2]
+            if r_sq2 < 0: return False
+            radius = np.sqrt(r_sq2)
+        except np.linalg.LinAlgError:
+            return False
 
-        # How far off is each point from the calculated radius?
-        residuals = np.abs(distances_to_center - radius)
-        mean_error = np.mean(residuals)
+        # ---------------------------------------------------------
+        # FINAL CHECKS
+        # ---------------------------------------------------------
+        # Calculate error based on the newly refined circle
+        dist2 = np.sqrt((x_clean - cx) ** 2 + (y_clean - cy) ** 2)
+        residuals2 = np.abs(dist2 - radius)
+        mean_error = np.mean(residuals2)
 
-        # 5. Evaluate if the shape is actually a circle
-        # TUNING REQUIRED: Adjust these based on your specific environment!
-        MAX_ERROR_THRESHOLD = 0.25  # Lower means it demands a more perfect circle
-        MIN_EXPECTED_RADIUS = 1.0  # Minimum size of the circle you are looking for
-        MAX_EXPECTED_RADIUS = 4.0  # Maximum size of the circle you are looking for
+        # Because we filtered out the bad points, we can be much stricter with the error
+        MAX_ERROR_THRESHOLD = 0.15
+        MIN_EXPECTED_RADIUS = 0.8
+        MAX_EXPECTED_RADIUS = 4.0
 
         is_circular = mean_error < MAX_ERROR_THRESHOLD
         is_correct_size = MIN_EXPECTED_RADIUS < radius < MAX_EXPECTED_RADIUS
 
-        return is_circular and is_correct_size
+        dist_to_center = math.hypot(cx, cy)
+        is_physically_inside = dist_to_center < (radius * 0.9)
+
+        return is_circular and is_correct_size and is_physically_inside
     
     def _get_exit_idx(self, d):
         max_val = max(d)
