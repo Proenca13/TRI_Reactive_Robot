@@ -273,8 +273,6 @@ class DecisionNode(Node):
 
         MAX_WHEEL_SPEED = 0.3  # Maximum physical speed of one wheel (m/s)
         WHEEL_BASE = 0.34      # Distance between the wheels (meters)
-        
-      
     
         # Create a smooth speed curve: max speed when driving straight, 
         # dropping to near zero when spinning in place.
