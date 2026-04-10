@@ -46,16 +46,17 @@ class DecisionNode(Node):
     def _analyze_room(self, d):
         """
         Instantly processes all LiDAR rays to find a best-fit circle.
-        Uses Percentile Variance to strictly reject squares/polygons.
+        Uses p80/p20 Percentile Variance to strictly reject squares 
+        while safely ignoring wide open doorways.
         """
         xs, ys = [], []
         for i, dist in enumerate(d):
-            if dist < 7.5:  # Ignore infinite rays (the open doorway)
+            if dist < 7.5:  # Ignore infinite rays 
                 angle = self._idx_to_rad(i)
                 xs.append(dist * math.cos(angle))
                 ys.append(dist * math.sin(angle))
 
-        if len(xs) < 22: # Fast fail if we aren't highly enclosed
+        if len(xs) < 22: 
             return False, 0.0, 0.0, 0.0
 
         x = np.array(xs)
@@ -73,30 +74,25 @@ class DecisionNode(Node):
         except np.linalg.LinAlgError:
             return False, 0.0, 0.0, 0.0
 
-        # =================================================================
-        # THE ABSOLUTE POLYGON KILLER 
-        # =================================================================
-        # Calculate how far every laser hit is from our fitted center
+       
         distances = np.sqrt((x - cx1)**2 + (y - cy1)**2)
         
-        # We use percentiles (10% and 90%) to ignore messy rays hitting the doorframe.
-        # This isolates the true flat walls (p10) and the deep corners (p90).
-        p90 = np.percentile(distances, 90)
-        p10 = np.percentile(distances, 10)
+        # We use p80 and p20. This safely trims out up to 20% of outlier rays
+        # caused by wide door frames or lasers escaping into the hallway.
+        p80 = np.percentile(distances, 80)
+        p20 = np.percentile(distances, 20)
         
-        # Calculate the percentage of variation. 
-        # In a circle, this is ~0%. In a square, this is ~41%.
-        variation = (p90 - p10) / r1
+        variation = (p80 - p20) / r1
         
-        # If the radius varies by more than 12%, it has corners! REJECT IT.
-        if variation > 0.12: 
+        # Relaxed threshold to 15%. A square guarantees ~25-41% variation.
+        # A circle with a door is now ~5% variation.
+        if variation > 0.15: 
             return False, 0.0, 0.0, 0.0
         # =================================================================
 
         # --- PASS 2: Clean Outliers ---
-        # Tighter margin: must be within 0.2m of the circle
         residuals = np.abs(distances - r1)
-        mask = residuals < 0.2 
+        mask = residuals < 0.25 # Slightly relaxed to allow for doorframe noise
         x_clean = x[mask]
         y_clean = y[mask]
 
@@ -115,7 +111,6 @@ class DecisionNode(Node):
         except np.linalg.LinAlgError:
             return False, 0.0, 0.0, 0.0
 
-        # Check if the robot is physically sitting inside this mathematical circle
         dist_to_center = math.hypot(cx, cy)
         is_inside = dist_to_center < (r2 * 0.9)
 
@@ -137,7 +132,7 @@ class DecisionNode(Node):
 
         # --- Priority 2: inside circle -> center and orient ---
         if is_circle:
-            self.get_logger().info('Inside circle - Centering via Regression')
+            self.get_logger().info('Inside circle - Centering')
             self._center(d, cx, cy)
             return
 
