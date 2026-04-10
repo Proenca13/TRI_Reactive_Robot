@@ -11,8 +11,8 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 TARGET_WALL_DISTANCE = 0.5  # Desired distance to the wall (meters)
-FORWARD_SPEED = 0.2         # Base forward speed (m/s)
-MAX_ANGULAR = 1.0           # Maximum turning speed (rad/s)
+FORWARD_SPEED = 1.0         # Base forward speed (m/s)
+MAX_ANGULAR = 5.0           # Maximum turning speed (rad/s)
 CENTERED_TOLERANCE = 0.05
 
 FRONT_IDX = 0
@@ -300,7 +300,7 @@ class DecisionNode(Node):
             scale_factor = MAX_WHEEL_SPEED / max_requested_wheel
             safe_linear_x *= scale_factor
             angular_z *= scale_factor
-
+            self.get_logger().info(f'MOTOR LIMITED! Wheel tried to hit {max_requested_wheel:.2f}m/s. Scaled down by {scale_factor:.2f}')
         # Send the final, memoryless, physics-safe command
         msg = Vector3()
         msg.x = float(angular_z)
