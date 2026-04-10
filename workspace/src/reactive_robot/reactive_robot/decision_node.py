@@ -34,7 +34,7 @@ class DecisionNode(Node):
 
         self.done = False
 
-        self.get_logger().info('Decision node started (Continuous Reactive Mode)')
+        self.get_logger().info('Decision node started (Strict Circularity Mode)')
 
     def scan_callback(self, msg: Float32MultiArray):
         if self.done:
@@ -43,18 +43,102 @@ class DecisionNode(Node):
         d = list(msg.data)
         self.step(d)
 
+    def _analyze_room(self, d):
+        """
+        Instantly processes all LiDAR rays to find a best-fit circle.
+        Uses Percentile Variance to strictly reject squares/polygons.
+        """
+        xs, ys = [], []
+        for i, dist in enumerate(d):
+            if dist < 7.5:  # Ignore infinite rays (the open doorway)
+                angle = self._idx_to_rad(i)
+                xs.append(dist * math.cos(angle))
+                ys.append(dist * math.sin(angle))
+
+        if len(xs) < 22: # Fast fail if we aren't highly enclosed
+            return False, 0.0, 0.0, 0.0
+
+        x = np.array(xs)
+        y = np.array(ys)
+
+        # --- PASS 1: Rough Circle Fit ---
+        A = np.c_[x, y, np.ones(len(x))]
+        b = x**2 + y**2
+        try:
+            c, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+            cx1, cy1 = c[0]/2.0, c[1]/2.0
+            r_sq1 = cx1**2 + cy1**2 + c[2]
+            if r_sq1 < 0: return False, 0.0, 0.0, 0.0
+            r1 = np.sqrt(r_sq1)
+        except np.linalg.LinAlgError:
+            return False, 0.0, 0.0, 0.0
+
+        # =================================================================
+        # THE ABSOLUTE POLYGON KILLER 
+        # =================================================================
+        # Calculate how far every laser hit is from our fitted center
+        distances = np.sqrt((x - cx1)**2 + (y - cy1)**2)
+        
+        # We use percentiles (10% and 90%) to ignore messy rays hitting the doorframe.
+        # This isolates the true flat walls (p10) and the deep corners (p90).
+        p90 = np.percentile(distances, 90)
+        p10 = np.percentile(distances, 10)
+        
+        # Calculate the percentage of variation. 
+        # In a circle, this is ~0%. In a square, this is ~41%.
+        variation = (p90 - p10) / r1
+        
+        # If the radius varies by more than 12%, it has corners! REJECT IT.
+        if variation > 0.12: 
+            return False, 0.0, 0.0, 0.0
+        # =================================================================
+
+        # --- PASS 2: Clean Outliers ---
+        # Tighter margin: must be within 0.2m of the circle
+        residuals = np.abs(distances - r1)
+        mask = residuals < 0.2 
+        x_clean = x[mask]
+        y_clean = y[mask]
+
+        if len(x_clean) < 22:
+            return False, 0.0, 0.0, 0.0
+
+        # --- PASS 3: Final Precision Fit ---
+        A2 = np.c_[x_clean, y_clean, np.ones(len(x_clean))]
+        b2 = x_clean**2 + y_clean**2
+        try:
+            c2, _, _, _ = np.linalg.lstsq(A2, b2, rcond=None)
+            cx, cy = c2[0]/2.0, c2[1]/2.0
+            r_sq2 = cx**2 + cy**2 + c2[2]
+            if r_sq2 < 0: return False, 0.0, 0.0, 0.0
+            r2 = np.sqrt(r_sq2)
+        except np.linalg.LinAlgError:
+            return False, 0.0, 0.0, 0.0
+
+        # Check if the robot is physically sitting inside this mathematical circle
+        dist_to_center = math.hypot(cx, cy)
+        is_inside = dist_to_center < (r2 * 0.9)
+
+        if is_inside:
+            return True, cx, cy, r2
+            
+        return False, 0.0, 0.0, 0.0
+
     def step(self, d):
+        # Run the regression analysis once per frame
+        is_circle, cx, cy, radius = self._analyze_room(d)
+
         # --- Priority 1: centered inside circle and heading out -> stop ---
-        if self._inside_circle(d) and self._is_centered(d):
+        if is_circle and self._is_centered(d, cx, cy):
             self.get_logger().info('Centered and heading out! Mission complete.')
             self._send(0.0, 0.0, stop=True)
             self.done = True
             return
 
         # --- Priority 2: inside circle -> center and orient ---
-        if self._inside_circle(d):
-            self.get_logger().info('Inside circle - Centering')
-            self._center(d)
+        if is_circle:
+            self.get_logger().info('Inside circle - Centering via Regression')
+            self._center(d, cx, cy)
             return
 
         # --- Priority 3: wall nearby -> follow (left hand Maze Strategy) ---
@@ -73,155 +157,38 @@ class DecisionNode(Node):
 
     def _wall_nearby(self, d):
         return min(d) < 0.8
-
-    def _inside_circle(self, d):
-        xs = []
-        ys = []
-        open_rays = 0
-
-        # 1. Filter rays and count open space
-        for i, dist in enumerate(d):
-            if dist > 7.0:
-                open_rays += 1
-            else:
-                angle = self._idx_to_rad(i)
-                xs.append(dist * math.cos(angle))
-                ys.append(dist * math.sin(angle))
-
-        # INCREASED SAFEGUARD: The opening in the '5' is large.
-        # We allow up to 10 rays to shoot into infinite space now.
-        if open_rays > 10:
-            return False
-
-        if len(xs) < 15:
-            return False
-
-        x = np.array(xs)
-        y = np.array(ys)
-
-        # ---------------------------------------------------------
-        # PASS 1: Rough Fit (Includes flat walls / noise)
-        # ---------------------------------------------------------
-        A_mat1 = np.c_[x, y, np.ones(len(x))]
-        b_vec1 = x ** 2 + y ** 2
-        try:
-            c1, _, _, _ = np.linalg.lstsq(A_mat1, b_vec1, rcond=None)
-            cx1, cy1 = c1[0] / 2.0, c1[1] / 2.0
-            r_sq1 = cx1 ** 2 + cy1 ** 2 + c1[2]
-            if r_sq1 < 0: return False
-            r1 = np.sqrt(r_sq1)
-        except np.linalg.LinAlgError:
-            return False
-
-        # Calculate how far each point is from the ROUGH circle
-        dist1 = np.sqrt((x - cx1) ** 2 + (y - cy1) ** 2)
-        residuals1 = np.abs(dist1 - r1)
-
-        # ---------------------------------------------------------
-        # PASS 2: Clean Fit (Discard flat walls)
-        # ---------------------------------------------------------
-        # Keep only points that are within 0.6 meters of our rough circle guess.
-        # This effectively filters out the straight tail of the '5'.
-        mask = residuals1 < 0.6
-        x_clean = x[mask]
-        y_clean = y[mask]
-
-        # If we threw away too many points, it wasn't a circle to begin with
-        if len(x_clean) < 10:
-            return False
-
-        # Recalculate using ONLY the clean, curved points
-        A_mat2 = np.c_[x_clean, y_clean, np.ones(len(x_clean))]
-        b_vec2 = x_clean ** 2 + y_clean ** 2
-        try:
-            c2, _, _, _ = np.linalg.lstsq(A_mat2, b_vec2, rcond=None)
-            cx, cy = c2[0] / 2.0, c2[1] / 2.0
-            r_sq2 = cx ** 2 + cy ** 2 + c2[2]
-            if r_sq2 < 0: return False
-            radius = np.sqrt(r_sq2)
-        except np.linalg.LinAlgError:
-            return False
-
-        # ---------------------------------------------------------
-        # FINAL CHECKS
-        # ---------------------------------------------------------
-        # Calculate error based on the newly refined circle
-        dist2 = np.sqrt((x_clean - cx) ** 2 + (y_clean - cy) ** 2)
-        residuals2 = np.abs(dist2 - radius)
-        mean_error = np.mean(residuals2)
-
-        # Because we filtered out the bad points, we can be much stricter with the error
-        MAX_ERROR_THRESHOLD = 0.15
-        MIN_EXPECTED_RADIUS = 0.8
-        MAX_EXPECTED_RADIUS = 4.0
-
-        is_circular = mean_error < MAX_ERROR_THRESHOLD
-        is_correct_size = MIN_EXPECTED_RADIUS < radius < MAX_EXPECTED_RADIUS
-
-        dist_to_center = math.hypot(cx, cy)
-        is_physically_inside = dist_to_center < (radius * 0.9)
-
-        return is_circular and is_correct_size and is_physically_inside
     
-    def _get_exit_idx(self, d):
-        max_val = max(d)
-        x = 0.0
-        y = 0.0
-        for i, val in enumerate(d):
-            if val >= max_val - 0.2:
-                angle = self._idx_to_rad(i)
-                x += math.cos(angle)
-                y += math.sin(angle)
-                
-        angle_rad = math.atan2(y, x)
-        angle_deg = math.degrees(angle_rad)
-        if angle_deg < 0:
-            angle_deg += 360.0
-            
-        return int(round(angle_deg / 10.0)) % 36
-
-    def _get_room_center(self, d):
-        xs = []
-        ys = []
-        for i, dist in enumerate(d):
-            if dist < 4.5:
-                angle = self._idx_to_rad(i)
-                xs.append(dist * math.cos(angle))
-                ys.append(dist * math.sin(angle))
-        
-        if not xs:
-            return 0.0, 0.0
-            
-        cx = (min(xs) + max(xs)) / 2.0
-        cy = (min(ys) + max(ys)) / 2.0
-        return cx, cy
-
-    def _is_centered(self, d):
-        cx, cy = self._get_room_center(d)
+    def _is_centered(self, d, cx, cy):
         dist_to_center = math.hypot(cx, cy)
         
+        # Find the exact middle of the doorway
         max_val = max(d)
-        door_indices = [i for i, val in enumerate(d) if val == max_val]
+        door_indices = [i for i, val in enumerate(d) if val >= max_val - 0.5]
+        if not door_indices:
+            return False
+            
         sum_sin = sum(math.sin(self._idx_to_rad(i)) for i in door_indices)
         sum_cos = sum(math.cos(self._idx_to_rad(i)) for i in door_indices)
         angle_to_exit = math.atan2(sum_sin, sum_cos)
         
         # We are done if we are physically in the center and facing the door
-        return dist_to_center < 0.25 and abs(angle_to_exit) < 0.2
+        return dist_to_center < 0.15 and abs(angle_to_exit) < 0.2 
 
-    def _center(self, d):
-        cx, cy = self._get_room_center(d)
+    def _center(self, d, cx, cy):
         dist_to_center = math.hypot(cx, cy)
         
         # Calculate where the door is
         max_val = max(d)
-        door_indices = [i for i, val in enumerate(d) if val == max_val]
-        sum_sin = sum(math.sin(self._idx_to_rad(i)) for i in door_indices)
-        sum_cos = sum(math.cos(self._idx_to_rad(i)) for i in door_indices)
-        angle_to_exit = math.atan2(sum_sin, sum_cos)
+        door_indices = [i for i, val in enumerate(d) if val >= max_val - 0.5]
+        if door_indices:
+            sum_sin = sum(math.sin(self._idx_to_rad(i)) for i in door_indices)
+            sum_cos = sum(math.cos(self._idx_to_rad(i)) for i in door_indices)
+            angle_to_exit = math.atan2(sum_sin, sum_cos)
+        else:
+            angle_to_exit = 0.0
         
-        # Drive to the geographical center first
-        if dist_to_center > 0.25:
+        # 1. Drive to the geographical center first
+        if dist_to_center > 0.15:
             angle_to_center = math.atan2(cy, cx)
             # Steer towards the geometric center
             angular_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, angle_to_center * 2.0))
@@ -230,7 +197,7 @@ class DecisionNode(Node):
             self._send(angular_z, linear_x)
             return
             
-        # Once perfectly centered geographically, spin in place to face the door
+        # 2. Once perfectly centered geographically, spin in place to face the door
         angular_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, angle_to_exit * 1.5))
         self._send(angular_z, 0.0)
 
@@ -256,67 +223,47 @@ class DecisionNode(Node):
             self._send(-1.0, 0.05) 
             return
 
-        # We ignore ray 7 so that turning right 
-        # doesn't cause the front-left sensor to clip the corner and cancel the jump.
+        # EARLY GAP DETECTION 
         left_gap_dists = d[8:11] 
         
         if min(left_gap_dists) > 1.5:
-            
-            # Checks the right side to see if we are outside or in a corridor
             right_dists = d[24:30]
             right_is_open = min(right_dists) > 2.0
             
             if right_is_open:
-                # TOP OPENING of the 5: Detach and jump.
-                # Steer right a bit harder (-0.25) to safely clear the corner
+                # TOP OPENING: Detach and jump
                 self._send(-0.25, FORWARD_SPEED) 
             else:
-                # BOTTOM CIRCLE: Dive in.
+                # BOTTOM CIRCLE: Dive in
                 self._send(0.8, 0.15) 
             return
 
-     
+        # P/D CONTROLLER
         left_dists = d[7:12]
         wall_dist = min(left_dists)
         
-        # Proportional (P) - Distance Error
         error = wall_dist - TARGET_WALL_DISTANCE 
-        
-        # Derivative (D) - Heading Error (Ray 7 is fwd-left, Ray 11 is back-left)
         heading_error = d[7] - d[11]
         
-        # Cap errors to prevent wild swings from sensor noise
         error = max(-0.5, min(0.5, error))
         heading_error = max(-0.5, min(0.5, heading_error))
         
-        # Combine distance correction and heading correction
         correction = (1.5 * error) + (0.8 * heading_error)
-        
         angular_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, correction))
-
-        # Adaptive speed: drive faster if driving straight, slower if turning hard
         adaptive_speed = FORWARD_SPEED if abs(angular_z) < 0.3 else 0.1
 
         self._send(angular_z, adaptive_speed)
 
     def _wander(self, d):
-        #COMPLETELY ISOLATED
+        # COMPLETELY ISOLATED
         if min(d) >= 7.9:
-            # We add a small constant (+0.2) to the sine wave.
-            # This makes the robot turn slightly more left than right on average.
-            # Instead of a straight line, it drives in a massive sweeping loop,
-            # guaranteeing it will eventually turn around and sweep the whole map.
             angular_z = 0.8 * math.sin(time.time()) + 0.2
             self._send(angular_z, FORWARD_SPEED)
             
         # OBJECT DETECTED IN THE DISTANCE
         else:
-            # As soon as ANY sensor detects something closer than 7.9m,
-            # it moves in that direction
             min_idx = d.index(min(d))
             angle_error = self._idx_to_rad(min_idx)
-            
-            #Steer gently towards the closest object to find a wall
             angular_z = max(-MAX_ANGULAR, min(MAX_ANGULAR, angle_error * 0.5))
             self._send(angular_z, FORWARD_SPEED)
 
@@ -328,7 +275,6 @@ class DecisionNode(Node):
         msg.y = float(linear_x)
         msg.z = 1.0 if stop else 0.0
         self.cmd_pub.publish(msg)
-
 
 def main(args=None):
     rclpy.init(args=args)
