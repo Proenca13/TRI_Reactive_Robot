@@ -11,8 +11,8 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 TARGET_WALL_DISTANCE = 0.5  # Desired distance to the wall (meters)
-FORWARD_SPEED = 0.2         # Base forward speed (m/s)
-MAX_ANGULAR = 1.0           # Maximum turning speed (rad/s)
+FORWARD_SPEED = 1.0         # Base forward speed (m/s)
+MAX_ANGULAR = 5.0           # Maximum turning speed (rad/s)
 CENTERED_TOLERANCE = 0.05
 
 FRONT_IDX = 0
@@ -265,10 +265,45 @@ class DecisionNode(Node):
     # -----------------------------------------------------------------------
 
     def _send(self, angular_z: float, linear_x: float, stop: bool = False):
+        if stop:
+            msg = Vector3()
+            msg.z = 1.0 
+            self.cmd_pub.publish(msg)
+            return
+
+        MAX_WHEEL_SPEED = 0.3  # Maximum physical speed of one wheel (m/s)
+        WHEEL_BASE = 0.34      # Distance between the wheels (meters)
+    
+        # Create a smooth speed curve: max speed when driving straight, 
+        # dropping to near zero when spinning in place.
+        turn_penalty = 1.0 - (abs(angular_z) / MAX_ANGULAR)
+        
+        # Ensure turn penalty doesn't drop below 20% to prevent getting stuck
+        turn_penalty = max(0.2, turn_penalty) 
+        
+        # Apply the penalty to the requested speed
+        safe_linear_x = linear_x * turn_penalty
+
+        # Calculate the instantaneous requested wheel speeds
+        v_left = safe_linear_x - (angular_z * WHEEL_BASE / 2.0)
+        v_right = safe_linear_x + (angular_z * WHEEL_BASE / 2.0)
+
+        # Find the fastest wheel
+        max_requested_wheel = max(abs(v_left), abs(v_right))
+
+        # If a wheel is being told to spin faster than the hardware allows,
+        # we scale BOTH linear and angular down proportionally. 
+        # This keeps the exact same turning arc, just at a safe physical speed.
+        if max_requested_wheel > MAX_WHEEL_SPEED:
+            scale_factor = MAX_WHEEL_SPEED / max_requested_wheel
+            safe_linear_x *= scale_factor
+            angular_z *= scale_factor
+            self.get_logger().info(f'MOTOR LIMITED! Wheel tried to hit {max_requested_wheel:.2f}m/s. Scaled down by {scale_factor:.2f}')
+        # Send the final, memoryless, physics-safe command
         msg = Vector3()
         msg.x = float(angular_z)
-        msg.y = float(linear_x)
-        msg.z = 1.0 if stop else 0.0
+        msg.y = float(safe_linear_x)
+        msg.z = 0.0
         self.cmd_pub.publish(msg)
 
 def main(args=None):
