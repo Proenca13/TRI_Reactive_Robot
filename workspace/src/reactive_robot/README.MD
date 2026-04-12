@@ -127,20 +127,6 @@ ros2 run reactive_robot decision_node
 ros2 run reactive_robot movement_node
 ```
 
-## Testing
-
-Run the unit and style checks with:
-
-```bash
-pytest test
-```
-
-Or use ROS 2 test tooling:
-
-```bash
-colcon test --packages-select reactive_robot
-```
-
 ## Notes
 
 - `sim.launch.py` uses random safe spawn zones for the robot.

@@ -46,6 +46,7 @@ class DecisionNode(Node):
     def _analyze_room(self, d):
         """
         Instantly processes all LiDAR rays to find a best-fit circle.
+
         Uses p80/p20 Percentile Variance to strictly reject squares 
         while safely ignoring wide open doorways.
         """
